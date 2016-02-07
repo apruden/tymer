@@ -1,0 +1,86 @@
+#!/usr/bin/python
+'''
+Credits:
+    - http://blog.acipo.com/wave-generation-in-python/
+    - http://stackoverflow.com/a/311634/219596
+'''
+import struct, math, StringIO, argparse, sched, time, wave, ossaudiodev
+from contextlib import closing
+
+try:
+    from ossaudiodev import AFMT_S16_NE
+except ImportError:
+    from sys import byteorder
+    if byteorder == "little":
+        AFMT_S16_NE = ossaudiodev.AFMT_S16_LE
+    else:
+        AFMT_S16_NE = ossaudiodev.AFMT_S16_BE
+
+sampleRate = 44100.0 # hertz
+duration = 1.0       # seconds
+lFreq =  880.00        # A
+rFreq = 1760.00        # A
+
+# 16 bit stereo sound
+sampleWidth = 2
+nChannels = 2
+
+
+def packSoundFrame(nChannels,sampleWidth,values):
+    formats = (None,'B','h',None,'l')
+    offsets = (None,127, 0, None,0)
+
+    format = '<'+formats[sampleWidth]*nChannels
+    offset = offsets[sampleWidth] 
+    volume = 2**(8*sampleWidth-1) - 1
+
+    args = [format]
+    for value in values:
+        args.append(int(offset + volume*value)) 
+    return struct.pack( *args )
+
+
+def generate_sound():
+    sf = StringIO.StringIO()
+    with closing(wave.open(sf,'w')) as wavef:
+        wavef.setnchannels(nChannels)
+        wavef.setsampwidth(sampleWidth)
+        wavef.setframerate(sampleRate)
+        nSamples = duration * sampleRate
+
+        for i in range(int(nSamples)):
+            l = math.cos(lFreq*math.pi*float(i)/float(sampleRate))
+            r = math.cos(rFreq*math.pi*float(i)/float(sampleRate))
+            data = packSoundFrame(nChannels, sampleWidth, [l,r])
+            wavef.writeframesraw(data)
+
+        wavef.writeframes('')
+
+    sf.seek(0)
+    return sf
+
+
+def play_alarm():
+    '''Needs osspd-alsa package on Ubuntu >=14.04'''
+    sf = generate_sound()
+
+    with closing(wave.open(sf,'rb')) as s:
+        (nc,sw,fr,nf,comptype, compname) = s.getparams()
+        data = s.readframes(nf)
+
+    with closing(ossaudiodev.open('w')) as dsp:
+        dsp.setparameters(AFMT_S16_NE, nc, fr)
+        for _ in range(3):
+            dsp.write(data)
+            dsp.flush()
+            dsp.sync()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Timer utility.')
+    parser.add_argument('minutes', type=float, help='Time in minutes')
+    args = parser.parse_args()
+
+    s = sched.scheduler(time.time, time.sleep)
+    s.enter(args.minutes * 60, 1, play_alarm, ())
+    s.run()
